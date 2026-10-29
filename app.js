@@ -41,7 +41,14 @@
   const yen = n => (Number(n) || 0).toLocaleString('ja-JP') + '円';
   const pad = n => String(n).padStart(2, '0');
   const today = () => { const d = new Date(); return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()); };
-  const toInt = s => { const n = parseInt(String(s).replace(/[^\d\-]/g, ''), 10); return isNaN(n) ? 0 : n; };
+  // 金額：全角・カンマ・円の記号だけを外し、残りが整数のときだけ数にする。空は 0、それ以外は NaN（小数点や英字を削って別の金額にしない）
+  const toInt = s => {
+    const t = String(s == null ? '' : s).normalize('NFKC').replace(/[,\s円¥]/g, '');
+    if (t === '') return 0;
+    return /^-?\d{1,9}$/.test(t) ? parseInt(t, 10) : NaN;
+  };
+  const AMT_ERR = '金額は円の整数で入れてください（例：5500）。';
+  const amtText = v => (Number.isFinite(v) && v !== 0 ? String(v) : '');
   const sum = (arr, f) => arr.reduce((s, x) => s + f(x), 0);
   const isImageDataUrl = u => /^data:image\/(jpeg|png);base64,[A-Za-z0-9+/=]+$/.test(String(u || ''));
 
@@ -69,9 +76,25 @@
     setTimeout(() => t.remove(), ms || 2600);
   }
   function busy(msg) {
-    $('#modal').innerHTML = `<div class="overlay"><div class="box" style="text-align:center"><div class="spin"></div><p>${esc(msg || '処理中…')}</p></div></div>`;
+    $('#modal').innerHTML = `<div class="busy"><div class="spinner"></div><p>${esc(msg || '処理しています…')}</p></div>`;
   }
-  function closeModal() { $('#modal').innerHTML = ''; }
+  // 重ねて出す画面の回（閉じる・開き直すたびに進める。前の画面あての遅れた結果を捨てるため）
+  let modalSeq = 0;
+  function closeModal() { modalSeq++; $('#modal').innerHTML = ''; }
+
+  /** 保存が通ったあと：一覧を読み直して画面を出す。読み直しだけ失敗したら「保存は済んだ」と伝える（同じ内容をもう一度送らせない） */
+  async function afterSave(doneMsg) {
+    const session = auth.session;
+    try { await reload(); }
+    catch (e) {
+      if (session !== auth.session) return;
+      closeModal();
+      toast(doneMsg + '。一覧の読み直しに失敗しました（' + errText(e) + '）。画面を下に引くか、開き直してください。', 6000);
+      return;
+    }
+    if (session !== auth.session) return;
+    closeModal(); toast(doneMsg); render(); window.scrollTo(0, 0);
+  }
   function ask(msg, okLabel, danger) {
     return new Promise(resolve => {
       const el = $('#dialog');
@@ -404,7 +427,10 @@
 
   function render() {
     if (!S.data) return;
-    document.querySelectorAll('nav.tabs button').forEach(b => b.classList.toggle('on', b.dataset.tab === S.tab));
+    document.querySelectorAll('nav.tabs button').forEach(b => {
+      b.classList.toggle('on', b.dataset.tab === S.tab);
+      b.setAttribute('aria-selected', b.dataset.tab === S.tab ? 'true' : 'false');
+    });
     if (S.tab === 'cats') return S.diaryCat ? renderDiary() : S.catId ? renderCatDetail() : renderCats();
     if (S.tab === 'add') return renderAdd();
     if (S.tab === 'list') return renderList();
@@ -487,7 +513,9 @@
         openSettings();
         const t = today().replace(/-/g, '');
         const url = blobUrl(new Blob([text], { type: 'application/json' }));
+        const tooBig = text.length > 7 * 1024 * 1024;
         $('#sOut').innerHTML = `<a class="btn primary block" style="margin-top:8px" href="${esc(url)}" download="保護活動経費_バックアップ_${t}.json">バックアップを保存する</a>
+          ${tooBig ? '<p class="err">データが多く、このファイルは「バックアップを読み込む」で読み戻せない大きさです（7MB まで）。ファイルは保存しておき、導入を手伝った人にご相談ください。</p>' : ''}
           <p class="muted small">保存したファイルは、新しい版のアプリの「バックアップを読み込む」で使います。写真はドライブに残るので、ファイルには入りません。メンバーも入りません（新しい版で登録し直してください）。</p>`;
       } catch (e) { openSettings(errText(e)); }
     };
@@ -619,12 +647,12 @@
         <div class="row"><h2 class="grow" style="margin:0">${esc(catName(S.catId))}</h2>${cat ? `<span class="badge s-${esc(cat.status)}">${esc(cat.status)}</span>` : ''}</div>
         ${cat ? `<p class="muted small" style="margin:6px 0">保護日 ${esc(cat.rescuedOn || '未入力')}</p>
           ${cat.memo ? `<p style="margin:6px 0;white-space:pre-wrap">${esc(cat.memo)}</p>` : ''}
-          <div class="row"><button class="btn" type="button" id="editCat">猫の情報を直す</button>
+          <div class="pair"><button class="btn" type="button" id="editCat">猫の情報を直す</button>
           <button class="btn primary" type="button" id="toDiary">📔 成長日記${cat.diaryCount ? `（${cat.diaryCount}件）` : ''}</button></div>` : `<p class="muted small">特定の猫に分けない経費です。</p>`}
       </div>
-      <div class="row">
-        <button class="btn primary grow" type="button" id="addRc">📷 領収書から追加</button>
-        <button class="btn grow" type="button" id="addMn">✏️ 手で追加</button>
+      <div class="pair">
+        <button class="btn primary" type="button" id="addRc">📷 領収書から追加</button>
+        <button class="btn" type="button" id="addMn">✏️ 手で追加</button>
       </div>
       <div class="panel">
         <div class="row"><strong class="grow">経費の合計</strong><span class="num" style="font-size:20px;font-weight:700">${yen(sum(ex, e => e.amount))}</span></div>
@@ -846,6 +874,8 @@
   function openShare(e) {
     if (!e) return;
     const session = auth.session;
+    const seq = ++modalSeq;
+    const alive = () => session === auth.session && seq === modalSeq && !!$('#igGo');
     const share = { files: null, ready: !e.photos.length, failed: false };
     $('#modal').innerHTML = `<div class="overlay"><div class="box">
       <h3 style="margin-top:0">📷 Instagram に投稿</h3>
@@ -864,7 +894,7 @@
     // 共有メニューはボタンを押した直後でないと開けないため、押す前に写真を受け取っておく
     if (e.photos.length) {
       Promise.allSettled(e.photos.map(loadPhoto)).then(results => {
-        if (session !== auth.session || !$('#igGo')) return;
+        if (!alive()) return;
         const srcs = results.filter(x => x.status === 'fulfilled').map(x => x.value);
         if (!srcs.length) throw new Error('写真を開けませんでした');
         share.files = srcs.map((src, i) => dataUrlToFile(src, `${e.date}_${i + 1}.jpg`));
@@ -879,27 +909,33 @@
           $('#igOut').innerHTML = share.files.map((f, i) => `<a class="btn block" style="margin-top:8px" href="${esc(blobUrl(f))}" download="${esc(f.name)}">写真${i + 1}を保存する</a>`).join('');
         }
       }).catch(err => {
-        if (session !== auth.session || !$('#igGo')) return;
+        if (!alive()) return;
         share.failed = true;
         $('#igState').textContent = '写真を受け取れませんでした（' + errText(err) + '）。閉じてもう一度お試しください。';
       });
     }
 
     $('#igGo').onclick = () => {
+      if (!alive()) return;
       const text = $('#igText').value;
       // コピーと共有メニューは、押した直後の同じ流れで呼ぶ（間に通信を挟むと、端末が共有メニューを開かない）
       const copied = copyText(text, $('#igText'));
       const sharing = share.files && share.canShare ? navigator.share({ files: share.files }) : null;
       copied.then(ok => {
+        if (!alive()) return;
         if (!sharing) { msg('igMsg', ok ? '投稿文をコピーしました。' + (e.photos.length ? '保存した写真と一緒に Instagram で投稿してください。' : '') : 'コピーできませんでした。投稿文を長押ししてコピーしてください。', ok ? 'ok' : 'err'); return; }
         sharing.then(async () => {
-          if (session !== auth.session) return;
-          msg('igMsg', (ok ? '投稿文をコピーしました。' : '投稿文はコピーできませんでした（長押しでコピーしてください）。') + 'Instagram の投稿画面で、投稿文の欄に貼り付けてください。', 'ok');
+          if (!alive()) return;
+          const head = (ok ? '投稿文をコピーしました。' : '投稿文はコピーできませんでした（長押しでコピーしてください）。') + 'Instagram の投稿画面で、投稿文の欄に貼り付けてください。';
+          msg('igMsg', head, 'ok');
           try {
             e.sharedAt = await call('markShared', { id: e.id });
-          } catch (err) { /* 記録できなくても共有は済んでいる */ }
+          } catch (err) {
+            // 共有は済んでいるので失敗にはしない。日時を残せなかったことだけ伝える
+            if (alive()) msg('igMsg', head + '\n（共有した日時は記録できませんでした：' + errText(err) + '）', 'ok');
+          }
         }, err => {
-          if (session !== auth.session) return;
+          if (!alive()) return;
           msg('igMsg', err && err.name === 'AbortError' ? '共有をやめました。' : '共有メニューを開けませんでした（' + errText(err) + '）。', 'err');
         });
       });
@@ -980,6 +1016,7 @@
   function checkExpense(r) {
     if (!r.catId) return '保護猫を選んでください。';
     if (!r.date) return '日付を入れてください。';
+    if (isNaN(r.amount)) return AMT_ERR;
     if (!r.amount) return '金額を入れてください。';
     if (!r.category) return '費目を選んでください。';
     return '';
@@ -1023,9 +1060,9 @@
       busy('登録中…');
       try {
         await call('addExpenses', { rows: [r] });
-        await reload(); closeModal(); toast('登録しました');
-        S.add = null; S.tab = 'cats'; S.catId = r.catId; render(); window.scrollTo(0, 0);
-      } catch (err) { closeModal(); $('#mErr').textContent = errText(err); }
+      } catch (err) { closeModal(); $('#mErr').textContent = errText(err); return; }
+      S.add = null; S.tab = 'cats'; S.catId = r.catId;
+      await afterSave('登録しました');
     };
   }
 
@@ -1073,7 +1110,7 @@
         <select id="rCat">${catOptions(a.catId, { placeholder: '選んでください' })}</select>
         <div class="two">
           <div><label class="f" for="rDate">日付</label><input type="date" id="rDate" value="${esc(a.date)}"></div>
-          <div><label class="f" for="rTotal">合計（円・税込）</label><input type="text" inputmode="numeric" id="rTotal" value="${esc(a.total)}"></div>
+          <div><label class="f" for="rTotal">合計（円・税込）</label><input type="text" inputmode="numeric" id="rTotal" value="${esc(amtText(a.total))}"></div>
         </div>
         <label class="f" for="rStore">支払先</label><input type="text" id="rStore" maxlength="100" value="${esc(a.store)}">
         ${a.taxNote ? `<p class="muted small">読み取りメモ：${esc(a.taxNote)}</p>` : ''}
@@ -1089,7 +1126,7 @@
             <div class="itemrow">
               <input type="text" data-i="${i}" data-k="name" maxlength="300" value="${esc(it.name)}" placeholder="品目">
               <div class="two" style="margin-top:6px">
-                <input type="text" inputmode="numeric" data-i="${i}" data-k="amount" value="${esc(it.amount)}" placeholder="金額">
+                <input type="text" inputmode="numeric" data-i="${i}" data-k="amount" value="${esc(amtText(it.amount))}" placeholder="金額">
                 <select data-i="${i}" data-k="category">${categoryOptions(it.category, '費目')}</select>
               </div>
               <div class="row" style="margin-top:6px">
@@ -1107,7 +1144,7 @@
           <label class="f" for="rKind">費目</label><select id="rKind">${categoryOptions(a.category, '選んでください')}</select>
           <label class="f" for="rDetail">内容</label><input type="text" id="rDetail" maxlength="300" value="${esc(a.detail)}">
         `}
-        <p class="err" id="rErr"></p>
+        <p class="err" id="rErr">${a.amtErr ? esc(a.amtErr) : ''}</p>
         <button class="btn primary block" type="button" id="rSave" style="margin-top:8px">この内容で登録する</button>
       </div>`;
 
@@ -1118,6 +1155,11 @@
         const it = a.items[+el.dataset.i];
         it[el.dataset.k] = el.dataset.k === 'amount' ? toInt(el.value) : el.value;
       });
+      // 整数でない金額は数にしない（入れ直してもらう）
+      const bad = isNaN(a.total) || a.items.some(i => isNaN(i.amount));
+      a.amtErr = bad ? AMT_ERR + '入れ直してください。' : '';
+      if (isNaN(a.total)) a.total = 0;
+      a.items.forEach(i => { if (isNaN(i.amount)) i.amount = 0; });
     };
     $('#back').onclick = async () => { if (await ask('入力をやめますか？（写真は登録に使わなければ、1日後にドライブのゴミ箱へ移ります）', 'やめる')) { S.add = { mode: 'pick', presetCat: a.presetCat }; renderAdd(); } };
     document.querySelectorAll('[data-split]').forEach(b => b.onclick = () => { pull(); a.split = b.dataset.split === '1'; renderReview(); });
@@ -1130,6 +1172,7 @@
     $('#rSave').onclick = async () => {
       pull();
       const err = m => { $('#rErr').textContent = m; };
+      if (a.amtErr) { renderReview(); return; }
       if (!a.catId) return err('どの保護猫の経費か選んでください。');
       if (!a.date) return err('日付を入れてください。');
       let rows;
@@ -1146,11 +1189,11 @@
       }
       busy('登録中…');
       try {
-        const n = await call('addExpenses', { rows });
-        await reload(); closeModal(); toast(`${n}件 登録しました`);
-        const go = a.catId;
-        S.add = null; S.tab = 'cats'; S.catId = go; render(); window.scrollTo(0, 0);
-      } catch (e) { closeModal(); err(errText(e)); }
+        var n = await call('addExpenses', { rows });
+      } catch (e) { closeModal(); err(errText(e)); return; }
+      const go = a.catId;
+      S.add = null; S.tab = 'cats'; S.catId = go;
+      await afterSave(`${n}件 登録しました`);
     };
   }
 
@@ -1282,7 +1325,7 @@
         $('#pPdfOut').innerHTML = `<a class="btn primary block" style="margin-top:10px" href="${esc(url)}" target="_blank" rel="noopener">PDF を開く</a>
           <a class="btn block" style="margin-top:8px" href="${esc(url)}" download="${esc(r.name)}">PDF を保存する</a>
           ${canShare ? '<button class="btn block" type="button" id="pShare" style="margin-top:8px">PDF を共有する（印刷・メール・LINE など）</button>' : ''}`;
-        if (canShare) $('#pShare').onclick = () => { navigator.share({ files: [file] }).catch(() => {}); };
+        if (canShare) $('#pShare').onclick = () => { navigator.share({ files: [file] }).catch(err => { if (!err || err.name !== 'AbortError') toast('共有メニューを開けませんでした（' + errText(err) + '）。「PDF を保存する」をお使いください。', 5000); }); };
       } catch (e) { closeModal(); toast(errText(e), 4000); }
     };
   }

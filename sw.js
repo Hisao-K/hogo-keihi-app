@@ -2,7 +2,7 @@
 // 端末に置くのは、下の SHELL に書いた画面のファイルだけ。電波が弱くてもアプリが開くようにする。
 // GAS との通信・写真・PDF・データは別のサイトあて（または POST）なので、ここでは扱わない・置かない。
 // 画面を更新したら VERSION を上げる。
-const VERSION = 'hogo-v1';
+const VERSION = 'hogo-v2';
 const SHELL = [
   './',
   './index.html',
