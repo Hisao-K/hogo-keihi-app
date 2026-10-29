@@ -1,0 +1,16 @@
+{
+  "name": "保護活動経費",
+  "short_name": "保護活動経費",
+  "description": "保護猫の活動の経費と成長日記",
+  "lang": "ja",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#f7f4ef",
+  "theme_color": "#E7741D",
+  "icons": [
+    { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png" },
+    { "src": "icons/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}

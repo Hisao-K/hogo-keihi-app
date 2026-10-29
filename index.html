@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>保護活動経費</title>
+<meta name="theme-color" content="#E7741D">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="保護活動経費">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="referrer" content="no-referrer">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icons/icon-192.png">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<link rel="stylesheet" href="style.css">
+<script src="config.js"></script>
+<script src="https://accounts.google.com/gsi/client" async defer></script>
+</head>
+<body>
+<header class="top noprint">
+  <div class="in">
+    <h1>保護活動経費</h1>
+    <span class="me" id="me"></span>
+    <button class="who" id="setBtn" type="button" hidden>設定</button>
+    <button class="close" id="logout" type="button" hidden>閉じる</button>
+  </div>
+  <div class="offline" id="offline" hidden>電波がありません。つながると、登録や読み込みができます。</div>
+</header>
+
+<!-- はじめの設定：接続先（この団体の GAS の URL）がまだない -->
+<section class="wrap" id="view-setup" hidden>
+  <div class="panel login">
+    <h2 style="margin-top:0">はじめの設定</h2>
+    <p class="lead">Apps Script で公開した URL（…/exec で終わるもの）をブラウザで開き、「アプリを開く」を押してください。</p>
+    <p class="muted small">開けないときは、その URL をここに貼り付けてください。</p>
+    <input type="url" id="setup-url" inputmode="url" autocomplete="off" placeholder="https://script.google.com/macros/s/…/exec">
+    <button class="btn primary block" type="button" id="setup-save" style="margin-top:10px">保存する</button>
+    <p class="msg" id="setup-msg"></p>
+  </div>
+</section>
+
+<!-- ログイン -->
+<section class="wrap" id="view-login" hidden>
+  <div class="panel login">
+    <h2 style="margin-top:0">ログイン</h2>
+    <p class="lead">登録された Google アカウントでログインしてください。</p>
+    <div class="gsi" id="gsi-button"></div>
+    <p class="msg" id="login-msg"></p>
+    <p class="muted small" id="login-api"></p>
+  </div>
+</section>
+
+<main class="wrap" id="app" hidden></main>
+
+<nav class="tabs noprint" id="tabs" hidden>
+  <div class="in">
+    <button type="button" data-tab="cats"><span class="ic">🐈</span>保護猫</button>
+    <button type="button" data-tab="add"><span class="ic">＋</span>経費を登録</button>
+    <button type="button" data-tab="list"><span class="ic">≡</span>経費一覧</button>
+    <button type="button" data-tab="report"><span class="ic">📄</span>帳票</button>
+  </div>
+</nav>
+
+<div id="modal"></div>
+<div id="dialog"></div>
+
+<script src="app.js"></script>
+</body>
+</html>
