@@ -143,12 +143,19 @@
   /**
    * リンクの ?api= は、確認して OK のときだけ使う（初めての端末でも、別の接続先に変わるときも）。
    * 知らない人から届いたリンクで接続先を書き換えられ、ログインや写真をその人の GAS に送ってしまうのを防ぐ。
+   * OK にした ?api= はアドレスに残す。iPhone ではホーム画面のアプリと Safari が別々に覚えるため、
+   * ホーム画面に追加したときのアドレスに接続先が入っていないと、アイコンから開いたとき接続先の画面が出てしまう。
+   * ホーム画面から開いたアプリでまだ接続先がないときは、確認しない（アドレスは Safari で OK にしたあと本人が追加したもの）。
    */
   function loadApiUrl() {
     const params = new URLSearchParams(location.search);
     const fromLink = params.get('api');
     let saved = storageGet(API_URL_STORE);
-    if (fromLink && validApiUrl(fromLink) && fromLink !== saved) {
+    const homeApp = window.matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
+    if (fromLink && validApiUrl(fromLink) && !validApiUrl(saved) && homeApp) {
+      storageSet(API_URL_STORE, fromLink);
+      saved = fromLink;
+    } else if (fromLink && validApiUrl(fromLink) && fromLink !== saved) {
       const q = validApiUrl(saved)
         ? '接続先（データの置き場）を切り替えますか？\n\n今の接続先: ' + apiLabel(saved) + '\n新しい接続先: ' + apiLabel(fromLink)
         : 'このリンクの接続先（データの置き場）を使いますか？\n\n接続先: ' + apiLabel(fromLink);
@@ -157,7 +164,7 @@
         saved = fromLink;
       }
     }
-    if (fromLink) {
+    if (fromLink && fromLink !== saved) {
       params.delete('api');
       try { history.replaceState(null, '', location.pathname + (params.toString() ? '?' + params : '') + location.hash); } catch (e) { /* 消せなくても動かす */ }
     }

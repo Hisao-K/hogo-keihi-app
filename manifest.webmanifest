@@ -3,7 +3,6 @@
   "short_name": "保護活動経費",
   "description": "保護猫の活動の経費と成長日記",
   "lang": "ja",
-  "start_url": "./",
   "scope": "./",
   "display": "standalone",
   "background_color": "#ffffff",
