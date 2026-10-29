@@ -26,11 +26,13 @@
       diaryCat: null,       // 成長日記を開いているとき
       diary: [],
       catFilter: '保護中',
-      listF: { cat: '', month: '', category: '', q: '' },
+      listF: { mode: 'exp', cat: '', month: '', category: '', q: '' },
+      incF: { month: '', kind: '', q: '' },
       repF: null,
       add: null,            // 経費登録の作業状態
       dform: null,          // 日記の入力中の状態
-      photoCache: {},       // 日記の写真（このログインの間だけ。閉じると消す）
+      cform: null,          // 猫の登録・直すの入力中の状態
+      photoCache: {},       // 日記・猫の写真（このログインの間だけ。閉じると消す）
       blobUrls: [],
     };
   }
@@ -331,7 +333,14 @@
   }
   function errText(e) { return (e && e.message) || String(e); }
 
-  async function reload() { S.data = await call('init'); }
+  // 画面は全部の団体で共通。GAS が前の版（2.0.0）のままの団体では、入金と猫の写真を出さない（v21＝2.1.0 以降の GAS）
+  async function reload() {
+    const d = await call('init');
+    d.v21 = Array.isArray(d.incomeKinds);
+    d.incomes = d.incomes || [];
+    d.incomeKinds = d.incomeKinds || [];
+    S.data = d;
+  }
 
   const role = () => (S.data && S.data.me.role) || 'member';
   const isOwner = () => role() === 'owner';
@@ -622,7 +631,13 @@
         <div class="row" style="margin-top:6px"><span class="muted small grow">${ex.length}件</span><span class="num" style="font-weight:700">${yen(sum(ex, e => e.amount))}</span></div>
       </button>`;
     };
+    const incAll = sum(d.incomes, i => i.amount), exAll = sum(d.expenses, e => e.amount), bal = incAll - exAll;
     $('#app').innerHTML = `
+      ${d.v21 ? `<div class="panel balance">
+        <div class="row"><span class="grow"><strong>残額</strong><span class="muted small">（入金 − 経費・これまでの合計）</span></span><span class="num bal${bal < 0 ? ' neg' : ''}">${yen(bal)}</span></div>
+        <div class="muted small">入金 ${yen(incAll)}　経費 ${yen(exAll)}</div>
+        <div class="pair" style="margin-top:8px"><button class="btn primary" type="button" id="addInc">💰 入金を登録</button><button class="btn" type="button" id="incList">入金の一覧</button></div>
+      </div>` : ''}
       <div class="stats">
         <div class="stat"><div class="k">保護中</div><div class="v">${active}頭</div></div>
         <div class="stat"><div class="k">今月の経費</div><div class="v num">${yen(month)}</div></div>
@@ -638,6 +653,9 @@
     document.querySelectorAll('[data-f]').forEach(b => b.onclick = () => { S.catFilter = b.dataset.f; renderCats(); });
     document.querySelectorAll('[data-cat]').forEach(b => b.onclick = () => { S.catId = b.dataset.cat; render(); window.scrollTo(0, 0); });
     $('#newCat').onclick = () => openCatForm(null);
+    if (!d.v21) return;
+    $('#addInc').onclick = () => openIncomeForm(null);
+    $('#incList').onclick = () => { S.tab = 'list'; S.listF.mode = 'inc'; render(); window.scrollTo(0, 0); };
   }
 
   function renderCatDetail() {
@@ -651,6 +669,7 @@
     $('#app').innerHTML = `
       <p><button class="linkbtn" type="button" id="back">← 保護猫の一覧へ</button></p>
       <div class="panel">
+        ${cat && cat.photo ? `<button class="catph" type="button" data-cph="${esc(cat.photo)}"><span class="spin" style="width:24px;height:24px"></span></button>` : ''}
         <div class="row"><h2 class="grow" style="margin:0">${esc(catName(S.catId))}</h2>${cat ? `<span class="badge s-${esc(cat.status)}">${esc(cat.status)}</span>` : ''}</div>
         ${cat ? `<p class="muted small" style="margin:6px 0">保護日 ${esc(cat.rescuedOn || '未入力')}</p>
           ${cat.memo ? `<p style="margin:6px 0;white-space:pre-wrap">${esc(cat.memo)}</p>` : ''}
@@ -673,6 +692,11 @@
     if (cat) {
       $('#editCat').onclick = () => openCatForm(cat);
       $('#toDiary').onclick = () => openDiary(cat.id);
+      const ph = document.querySelector('[data-cph]');
+      if (ph) loadPhoto(ph.dataset.cph, 'catPhoto').then(src => {
+        ph.innerHTML = `<img alt="${esc(cat.name)}の写真" src="${esc(src)}">`;
+        ph.onclick = () => showImage(src);
+      }, () => { ph.textContent = '写真を開けませんでした'; });
     }
     $('#addRc').onclick = () => { S.tab = 'add'; S.add = { mode: 'pick', presetCat: S.catId }; S.catId = null; render(); };
     $('#addMn').onclick = () => { S.tab = 'add'; S.add = { mode: 'manual', presetCat: S.catId }; S.catId = null; render(); };
@@ -680,8 +704,13 @@
     bindExpenseList();
   }
 
-  function openCatForm(cat) {
-    const c = cat || { id: '', name: '', rescuedOn: today(), status: '保護中', memo: '' };
+  /** 猫の登録・直す。写真は選んだ時点で GAS に保存し（受付中）、「保存する」で猫に付ける。付けなければ1日後にゴミ箱へ移る */
+  function openCatForm(cat, errMsg, keep) {
+    if (!keep || !S.cform) {
+      const c = cat || { id: '', name: '', rescuedOn: today(), status: '保護中', memo: '', photo: '' };
+      S.cform = { id: c.id, name: c.name, rescuedOn: c.rescuedOn, status: c.status, memo: c.memo, photo: c.photo || '', src: '' };
+    }
+    const c = S.cform;
     $('#modal').innerHTML = `<div class="overlay"><div class="box">
       <h3 style="margin-top:0">${cat ? '猫の情報を直す' : '猫を登録'}</h3>
       <label class="f" for="cName">名前（仮名でも可）</label><input type="text" id="cName" maxlength="60" value="${esc(c.name)}">
@@ -690,12 +719,34 @@
         <div><label class="f" for="cStat">状態</label><select id="cStat">${S.data.statuses.map(s => `<option value="${esc(s)}"${s === c.status ? ' selected' : ''}>${esc(s)}</option>`).join('')}</select></div>
       </div>
       <label class="f" for="cMemo">特徴・メモ（柄・性別・保護場所など）</label><textarea id="cMemo" maxlength="500">${esc(c.memo)}</textarea>
-      <p class="err" id="cErr"></p>
+      ${S.data.v21 ? `<label class="f">写真（1枚）</label>
+      ${c.photo ? `<div class="photos"><div class="ph" id="cPh">${c.src ? `<img alt="写真" src="${esc(c.src)}">` : '<span class="spin" style="width:20px;height:20px"></span>'}<button class="x" type="button" id="cRmPh" aria-label="外す">×</button></div></div>` : ''}
+      <label class="btn block" for="cFile">📷 ${c.photo ? '写真を替える（撮る／選ぶ）' : '写真を撮る／選ぶ'}</label><input type="file" id="cFile" accept="image/*" class="vh">` : ''}
+      <p class="err" id="cErr">${esc(errMsg || '')}</p>
       <div class="row"><button class="btn grow" type="button" id="cCancel">やめる</button><button class="btn primary grow" type="button" id="cSave">保存する</button></div>
       ${cat ? `<button class="btn danger block" type="button" id="cDel" style="margin-top:16px">この猫を削除</button>` : ''}
     </div></div>`;
-    $('#cCancel').onclick = closeModal;
+    const pull = () => { Object.assign(c, { name: $('#cName').value.trim(), rescuedOn: $('#cDate').value, status: $('#cStat').value, memo: $('#cMemo').value }); };
+    if (c.photo && !c.src) loadPhoto(c.photo, 'catPhoto').then(src => { c.src = src; const el = $('#cPh .spin'); if (el) el.outerHTML = `<img alt="写真" src="${esc(src)}">`; }, () => {});
+    if ($('#cRmPh')) $('#cRmPh').onclick = () => { pull(); c.photo = ''; c.src = ''; openCatForm(cat, '', true); };
+    if ($('#cFile')) $('#cFile').onchange = async ev => {
+      const file = ev.target.files[0];
+      if (!file) return;
+      pull();
+      busy('写真を保存中…');
+      const session = auth.session;
+      try {
+        const src = await resizeImage(file, PHOTO_MAX_SIDE);
+        if (session !== auth.session) return;
+        const r = await call('uploadCatPhoto', { image: src.split(',')[1] });
+        c.photo = r.photoId; c.src = src;
+        S.photoCache[r.photoId] = Promise.resolve(src);
+        openCatForm(cat, '', true);
+      } catch (e) { openCatForm(cat, errText(e), true); }
+    };
+    $('#cCancel').onclick = () => { S.cform = null; closeModal(); };
     if (cat) $('#cDel').onclick = async () => {
+      pull();
       const ex = expensesOf(cat.id);
       const m = `「${cat.name}」を削除しますか？` + (ex.length
         ? `\nこの猫の経費 ${ex.length}件（${yen(sum(ex, e => e.amount))}）も一緒に削除され、一覧と帳票に出なくなります。`
@@ -708,21 +759,21 @@
         closeModal();
         toast(`「${cat.name}」を削除しました`);
         S.catId = null; S.tab = 'cats';
+        S.cform = null;
         render(); window.scrollTo(0, 0);
-      } catch (e) { openCatForm(cat); $('#cErr').textContent = errText(e); }
+      } catch (e) { openCatForm(cat, errText(e), true); }
     };
     $('#cSave').onclick = async () => {
-      const body = { id: c.id, name: $('#cName').value.trim(), rescuedOn: $('#cDate').value, status: $('#cStat').value, memo: $('#cMemo').value };
+      pull();
+      const body = { id: c.id, name: c.name, rescuedOn: c.rescuedOn, status: c.status, memo: c.memo, photo: c.photo };
       if (!body.name) { $('#cErr').textContent = '名前を入れてください。'; return; }
       busy('保存中…');
-      try {
-        const id = await call('saveCat', { cat: body });
-        await reload();
-        closeModal();
-        toast('保存しました');
-        if (!cat) { S.catId = id; S.catFilter = body.status === '保護中' ? '保護中' : 'すべて'; }
-        render();
-      } catch (e) { openCatForm(cat); $('#cErr').textContent = errText(e); }
+      let id;
+      try { id = await call('saveCat', { cat: body }); }
+      catch (e) { openCatForm(cat, errText(e), true); return; }
+      S.cform = null;
+      if (!cat) { S.tab = 'cats'; S.catId = id; S.catFilter = body.status === '保護中' ? '保護中' : 'すべて'; }
+      await afterSave('保存しました');
     };
   }
 
@@ -737,10 +788,10 @@
     } catch (e) { closeModal(); S.diaryCat = null; toast(errText(e), 4000); }
   }
 
-  /** 日記の写真（このログインの間だけ覚える） */
-  function loadPhoto(id) {
+  /** 日記・猫の写真（このログインの間だけ覚える）。action＝diaryPhoto（日記）／catPhoto（猫） */
+  function loadPhoto(id, action) {
     if (!S.photoCache[id]) {
-      S.photoCache[id] = call('diaryPhoto', { photoId: id }).then(r => {
+      S.photoCache[id] = call(action || 'diaryPhoto', { photoId: id }).then(r => {
         if (!isImageDataUrl(r.dataUrl)) throw new Error('この写真は開けませんでした。');
         return r.dataUrl;
       });
@@ -1029,6 +1080,55 @@
     return '';
   }
 
+  /* ===== 入金（寄付・支援金など。猫には分けない） ===== */
+  function incomeList(list) {
+    if (!list.length) return `<div class="list"><div class="empty">入金はまだありません。</div></div>`;
+    return `<div class="list">${list.map(i => `
+      <button class="item" type="button" data-inc="${esc(i.id)}">
+        <div class="main">
+          <div class="t1">${esc(i.kind)}${i.payer ? '　' + esc(i.payer) : ''}</div>
+          <div class="t2">${esc(i.date)}${i.detail ? '　' + esc(i.detail) : ''}　登録：${esc(i.createdBy || '代表者')}</div>
+        </div>
+        <div class="amt num inc">${yen(i.amount)}</div>
+      </button>`).join('')}</div>`;
+  }
+
+  function openIncomeForm(inc, errMsg, draft) {
+    const i = draft || inc || { id: '', date: today(), kind: '', amount: 0, payer: '', detail: '' };
+    $('#modal').innerHTML = `<div class="overlay"><div class="box">
+      <h3 style="margin-top:0">${inc ? '入金を直す' : '入金を登録'}</h3>
+      ${inc ? `<p class="muted small" style="margin:0">登録 ${esc(inc.createdAt)}（${esc(inc.createdBy || '代表者')}）${inc.updatedAt ? `／最終更新 ${esc(inc.updatedAt)}${inc.editedBy ? `（${esc(inc.editedBy)}）` : ''}` : ''}</p>` : ''}
+      <div class="two">
+        <div><label class="f" for="iDate">日付</label><input type="date" id="iDate" value="${esc(i.date)}"></div>
+        <div><label class="f" for="iAmt">金額（円）</label><input type="text" inputmode="numeric" id="iAmt" value="${esc(amtText(i.amount))}"></div>
+      </div>
+      <label class="f" for="iKind">種類</label><select id="iKind"><option value="">選んでください</option>${S.data.incomeKinds.map(k => `<option value="${esc(k)}"${k === i.kind ? ' selected' : ''}>${esc(k)}</option>`).join('')}</select>
+      <label class="f" for="iPayer">入金元（任意。個人名を書くときは本人の了承を）</label><input type="text" id="iPayer" maxlength="100" value="${esc(i.payer)}" placeholder="例：○○動物病院、匿名">
+      <label class="f" for="iDetail">内容（任意）</label><input type="text" id="iDetail" maxlength="300" value="${esc(i.detail)}" placeholder="例：クラウドファンディング、譲渡会の募金箱">
+      <p class="err" id="iErr">${esc(errMsg || '')}</p>
+      <div class="row">${inc ? '<button class="btn danger" type="button" id="iDel">削除</button>' : ''}<span class="grow"></span><button class="btn" type="button" id="iCancel">やめる</button><button class="btn primary" type="button" id="iSave">${inc ? '保存する' : '登録する'}</button></div>
+    </div></div>`;
+    const read = () => ({ id: inc ? inc.id : '', date: $('#iDate').value, amount: toInt($('#iAmt').value), kind: $('#iKind').value, payer: $('#iPayer').value.trim(), detail: $('#iDetail').value.trim() });
+    $('#iCancel').onclick = closeModal;
+    $('#iSave').onclick = async () => {
+      const body = read();
+      const m = !body.date ? '日付を入れてください。' : isNaN(body.amount) || body.amount < 0 ? AMT_ERR : !body.amount ? '金額を入れてください。' : !body.kind ? '種類を選んでください。' : '';
+      if (m) { $('#iErr').textContent = m; return; }
+      busy(inc ? '保存中…' : '登録中…');
+      try { await call(inc ? 'updateIncome' : 'addIncome', { income: body }); }
+      catch (e) { openIncomeForm(inc, errText(e), body); return; }
+      await afterSave(inc ? '保存しました' : '入金を登録しました');
+    };
+    if (inc) $('#iDel').onclick = async () => {
+      const draft = read();
+      if (!await ask(`この入金（${inc.date} ${yen(inc.amount)}）を削除しますか？`, '削除する', true)) return;
+      busy('削除中…');
+      try { await call('deleteIncome', { id: inc.id }); }
+      catch (e) { openIncomeForm(inc, errText(e), draft); return; }
+      await afterSave('削除しました');
+    };
+  }
+
   /* ===== 経費を登録 ===== */
   function renderAdd() {
     const a = S.add || (S.add = { mode: 'pick', presetCat: '' });
@@ -1042,8 +1142,12 @@
       <p class="muted small">写真から日付・支払先・金額を読み取ります。読み取った内容は登録前に確認・修正できます。写真は代表者の Google ドライブに保存されます。</p>
       ${S.data.geminiReady ? '' : '<p class="note">いまはドライブの文字読み取りで、日付・支払先・合計を読み取ります。品目と費目は手で入れてください。代表者が「設定」で Gemini のキーを登録すると、品目まで読み取れます。</p>'}
       <button class="btn big block" type="button" id="toManual" style="margin-top:16px">✏️ 領収書なしで手入力する</button>
+      ${S.data.v21 ? `<h2 style="margin-top:28px">入金を登録</h2>
+      <button class="btn big block" type="button" id="toIncome">💰 入金（寄付・支援金など）を登録する</button>
+      <p class="muted small">入金は猫ごとに分けずに記録します。ホーム画面の残額と、帳票の収支報告に入ります。</p>` : ''}
     `;
     $('#toManual').onclick = () => { a.mode = 'manual'; renderAdd(); };
+    if ($('#toIncome')) $('#toIncome').onclick = () => openIncomeForm(null);
     $('#rcFile').onchange = ev => { const f = ev.target.files[0]; if (f) analyze(f); };
   }
 
@@ -1205,7 +1309,43 @@
   }
 
   /* ===== 経費一覧 ===== */
+  function listSwitch() {
+    if (!S.data.v21) return '';
+    return `<div class="chips"><button type="button" class="chip${S.listF.mode === 'inc' ? '' : ' on'}" data-lm="exp">経費</button><button type="button" class="chip${S.listF.mode === 'inc' ? ' on' : ''}" data-lm="inc">入金</button></div>`;
+  }
+  function bindListSwitch() {
+    document.querySelectorAll('[data-lm]').forEach(b => b.onclick = () => { S.listF.mode = b.dataset.lm; renderList(); });
+  }
+
+  function renderIncomeList() {
+    const d = S.data, f = S.incF;
+    const months = Array.from(new Set(d.incomes.map(i => i.date.slice(0, 7)))).sort().reverse();
+    const list = d.incomes.filter(i =>
+      (!f.month || i.date.slice(0, 7) === f.month) && (!f.kind || i.kind === f.kind) &&
+      (!f.q || (i.payer + ' ' + i.detail + ' ' + i.createdBy).indexOf(f.q) >= 0)).sort(byDateDesc);
+    $('#app').innerHTML = `
+      <h2>入金一覧</h2>
+      ${listSwitch()}
+      <div class="panel">
+        <div class="two">
+          <div><label class="f" for="gMonth">月</label><select id="gMonth"><option value="">すべて</option>${months.map(m => `<option value="${esc(m)}"${m === f.month ? ' selected' : ''}>${esc(m.replace('-', '年'))}月</option>`).join('')}</select></div>
+          <div><label class="f" for="gKind">種類</label><select id="gKind"><option value="">すべて</option>${d.incomeKinds.map(k => `<option value="${esc(k)}"${k === f.kind ? ' selected' : ''}>${esc(k)}</option>`).join('')}</select></div>
+        </div>
+        <label class="f" for="gQ">キーワード（入金元・内容・登録者）</label><input type="text" id="gQ" value="${esc(f.q)}">
+      </div>
+      <div class="row" style="margin:8px 2px"><span class="grow muted">${list.length}件</span><strong class="num">合計 ${yen(sum(list, i => i.amount))}</strong></div>
+      <button class="btn primary block" type="button" id="gAdd">💰 入金を登録</button>
+      ${incomeList(list)}
+    `;
+    bindListSwitch();
+    ['#gMonth', '#gKind'].forEach(s => $(s).onchange = () => { Object.assign(f, { month: $('#gMonth').value, kind: $('#gKind').value }); renderIncomeList(); });
+    $('#gQ').onchange = () => { f.q = $('#gQ').value.trim(); renderIncomeList(); };
+    $('#gAdd').onclick = () => openIncomeForm(null);
+    document.querySelectorAll('[data-inc]').forEach(b => b.onclick = () => openIncomeForm(d.incomes.find(i => i.id === b.dataset.inc)));
+  }
+
   function renderList() {
+    if (S.listF.mode === 'inc' && S.data.v21) return renderIncomeList();
     const d = S.data, f = S.listF;
     const months = Array.from(new Set(d.expenses.map(e => e.date.slice(0, 7)))).sort().reverse();
     let ex = d.expenses.filter(e =>
@@ -1215,6 +1355,7 @@
     ex = ex.sort(byDateDesc);
     $('#app').innerHTML = `
       <h2>経費一覧</h2>
+      ${listSwitch()}
       <div class="panel">
         <div class="two">
           <div><label class="f" for="fCat">保護猫</label><select id="fCat">${catOptions(f.cat, { placeholder: 'すべて' })}</select></div>
@@ -1227,6 +1368,7 @@
       ${expenseList(ex, true)}
       <button class="btn block" type="button" id="toRep" style="margin-top:12px">📄 この条件で帳票を出す</button>
     `;
+    bindListSwitch();
     const upd = () => { Object.assign(f, { cat: $('#fCat').value, month: $('#fMonth').value, category: $('#fKind').value }); renderList(); };
     ['#fCat', '#fMonth', '#fKind'].forEach(s => $(s).onchange = upd);
     $('#fQ').onchange = () => { f.q = $('#fQ').value.trim(); renderList(); };
@@ -1262,19 +1404,54 @@
     const period = (f.from || f.to) ? `${f.from || '最初'} 〜 ${f.to || '最新'}` : '全期間';
     const cond = [f.cat ? `保護猫：${catName(f.cat)}` : '保護猫：すべて', f.category ? `費目：${f.category}` : ''].filter(Boolean).join('　');
     const total = sum(ex, e => e.amount);
+    const kindOrder = d.categories.filter(k => kinds[k]).concat(Object.keys(kinds).filter(k => d.categories.indexOf(k) < 0));
+
+    // 収支報告：入金は猫・費目に分けていないので、保護猫と費目が「すべて」のときだけ出す（Report.js と同じ中身）
+    const incomeOn = !f.cat && !f.category && d.v21;
+    let balance = '', incDetail = '';
+    if (!d.v21) {
+      balance = '';
+    } else if (incomeOn) {
+      const inc = d.incomes.filter(i => (!f.from || i.date >= f.from) && (!f.to || i.date <= f.to)).sort((a, b) => a.date.localeCompare(b.date));
+      const carry = f.from ? sum(d.incomes.filter(i => i.date < f.from), i => i.amount) - sum(d.expenses.filter(e => e.date < f.from), e => e.amount) : 0;
+      const ik = Object.create(null);
+      inc.forEach(i => { ik[i.kind] = (ik[i.kind] || 0) + i.amount; });
+      const incKinds = d.incomeKinds.filter(k => ik[k]).concat(Object.keys(ik).filter(k => d.incomeKinds.indexOf(k) < 0));
+      const incTotal = sum(inc, i => i.amount);
+      const line = (head, label, amt) => `<tr><td>${head}</td><td>${esc(label)}</td><td class="r">${yen(amt)}</td></tr>`;
+      const subl = (label, amt) => `<tr class="sub"><td colspan="2">${label}</td><td class="r">${yen(amt)}</td></tr>`;
+      balance = `<h2>収支報告</h2><table><thead><tr><th style="width:18%">区分</th><th>内訳</th><th class="r" style="width:22%">金額</th></tr></thead><tbody>` +
+        (f.from ? line('前期からの繰越', '開始日より前の入金 − 経費', carry) : '') +
+        (incKinds.map((k, i) => line(i ? '' : '収入', k, ik[k])).join('') || line('収入', 'なし', 0)) +
+        subl('収入の合計', incTotal) +
+        (kindOrder.map((k, i) => line(i ? '' : '支出', k, kinds[k].amt)).join('') || line('支出', 'なし', 0)) +
+        subl('支出の合計', total) +
+        subl('この期間の収支（収入 − 支出）', incTotal - total) +
+        subl('残額（次期への繰越）', carry + incTotal - total) +
+        '</tbody></table>';
+      if (f.detail && inc.length) {
+        incDetail = `<h2>入金の明細</h2><table><thead><tr><th style="width:11%">日付</th><th style="width:17%">種類</th><th>内容</th><th style="width:20%">入金元</th><th class="r" style="width:13%">金額</th></tr></thead><tbody>
+          ${inc.map(i => `<tr><td>${esc(i.date)}</td><td>${esc(i.kind)}</td><td>${esc(i.detail)}</td><td>${esc(i.payer)}</td><td class="r">${yen(i.amount)}</td></tr>`).join('')}
+          <tr class="sub"><td colspan="4">合計（${inc.length}件）</td><td class="r">${yen(incTotal)}</td></tr></tbody></table>`;
+      }
+    } else {
+      balance = '<p class="meta">収支報告（入金と残額）は、保護猫と費目を「すべて」にしたときに出します。入金は猫・費目に分けていないためです。</p>';
+    }
+
     let h = `<div class="rp">
-      <h1>保護活動経費 明細書</h1>
+      <h1>${incomeOn ? '保護活動 収支報告書・経費明細書' : '保護活動経費 明細書'}</h1>
       <div class="meta">${d.ownerName ? '名前：' + esc(d.ownerName) + '<br>' : ''}対象期間：${esc(period)}<br>${esc(cond)}</div>
+      ${balance}
       <h2>保護猫別の集計</h2>
       <table><thead><tr><th>保護猫</th><th>状態</th><th class="r">件数</th><th class="r">金額</th></tr></thead><tbody>
       ${order.map(id => `<tr><td>${esc(catName(id))}</td><td>${esc(statusOf(id))}</td><td class="r">${groups[id].length}</td><td class="r">${yen(sum(groups[id], e => e.amount))}</td></tr>`).join('') || '<tr><td colspan="4" class="c">該当なし</td></tr>'}
       <tr class="sub"><td colspan="2">合計</td><td class="r">${ex.length}</td><td class="r">${yen(total)}</td></tr></tbody></table>
       <h2>費目別の集計</h2>
       <table><thead><tr><th>費目</th><th class="r">件数</th><th class="r">金額</th></tr></thead><tbody>
-      ${d.categories.filter(k => kinds[k]).concat(Object.keys(kinds).filter(k => d.categories.indexOf(k) < 0)).map(k => `<tr><td>${esc(k)}</td><td class="r">${kinds[k].n}</td><td class="r">${yen(kinds[k].amt)}</td></tr>`).join('') || '<tr><td colspan="3" class="c">該当なし</td></tr>'}
-      </tbody></table>`;
+      ${kindOrder.map(k => `<tr><td>${esc(k)}</td><td class="r">${kinds[k].n}</td><td class="r">${yen(kinds[k].amt)}</td></tr>`).join('') || '<tr><td colspan="3" class="c">該当なし</td></tr>'}
+      </tbody></table>${incDetail}`;
     if (f.detail) {
-      h += `<h2>明細</h2>`;
+      h += `<h2>経費の明細</h2>`;
       order.forEach(id => {
         const g = groups[id];
         h += `<div class="cat"><h3>${esc(catName(id))}${statusOf(id) ? `（${esc(statusOf(id))}）` : ''}</h3>
@@ -1283,7 +1460,7 @@
           <tr class="sub"><td colspan="5">小計（${g.length}件）</td><td class="r">${yen(sum(g, e => e.amount))}</td></tr></tbody></table></div>`;
       });
     }
-    h += `<div class="grand">総合計　${yen(total)}</div></div>`;
+    h += `<div class="grand">経費の総合計　${yen(total)}</div></div>`;
     return h;
   }
 

@@ -123,6 +123,10 @@ label.f { margin: 12px 0 4px; }
 .note { background: var(--panel); border-left: 3px solid var(--orange); border-radius: 10px; padding: 10px 12px; font-size: 15px; margin: 10px 0; }
 
 /* 集計 */
+.balance .bal { font-size: 24px; font-weight: 700; }
+.balance .bal.neg { color: var(--err); }
+.catph { display: block; width: 100%; max-height: 280px; min-height: 120px; padding: 0; margin: 0 0 10px; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; background: var(--bg); color: var(--sub); }
+.catph img { display: block; width: 100%; max-height: 280px; object-fit: cover; }
 .stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; margin: 0 0 12px; }
 .stat { background: var(--panel); border-radius: 10px; padding: 8px 10px; min-width: 0; }
 .stat .k { font-size: 12px; color: var(--sub); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
